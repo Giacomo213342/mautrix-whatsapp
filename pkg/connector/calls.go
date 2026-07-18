@@ -71,26 +71,36 @@ func (wa *WhatsAppClient) handleIncomingVoiceCall(waCall *meowcaller.Call) {
 	}
 	call.portal = portal
 	call.intent = intent
+	call.setupMu.Lock()
+	if call.ending.Load() {
+		call.setupMu.Unlock()
+		return
+	}
 	if err = call.manager.newPeerConnection(call); err != nil {
+		call.setupMu.Unlock()
 		call.failIncomingSetup(ctx, err)
 		return
 	}
 	call.attachWhatsAppAudio()
 	offer, err := call.peerConnection.CreateOffer(nil)
 	if err != nil {
+		call.setupMu.Unlock()
 		call.failIncomingSetup(ctx, fmt.Errorf("create Matrix offer: %w", err))
 		return
 	}
 	if err = call.peerConnection.SetLocalDescription(offer); err != nil {
+		call.setupMu.Unlock()
 		call.failIncomingSetup(ctx, fmt.Errorf("set Matrix local offer: %w", err))
 		return
 	}
 	lifetime := int(config.RingTimeout / time.Millisecond)
 	if err = call.sendInvite(ctx, *call.peerConnection.LocalDescription(), lifetime); err != nil {
+		call.setupMu.Unlock()
 		call.failIncomingSetup(ctx, fmt.Errorf("send Matrix invite: %w", err))
 		return
 	}
 	call.markDescriptionSent(ctx)
+	call.setupMu.Unlock()
 	call.startRingTimeout(config.RingTimeout)
 }
 

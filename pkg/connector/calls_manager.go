@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"sync"
+	"sync/atomic"
 
 	"github.com/pion/webrtc/v4"
 	"github.com/purpshell/meowcaller"
@@ -36,6 +37,8 @@ type liveVoiceCall struct {
 	peer         string
 	localPartyID string
 
+	setupMu                  sync.Mutex
+	ending                   atomic.Bool
 	mu                       sync.Mutex
 	peerConnection           *webrtc.PeerConnection
 	localTrack               *webrtc.TrackLocalStaticSample
@@ -140,8 +143,11 @@ func newCallIdentifier() (string, error) {
 }
 
 func (call *liveVoiceCall) terminate(ctx context.Context, reason string, notifyMatrix, notifyWhatsApp bool) {
+	call.ending.Store(true)
 	var whatsAppCall *meowcaller.Call
 	call.cleanupOnce.Do(func() {
+		call.setupMu.Lock()
+		defer call.setupMu.Unlock()
 		phase := call.session.Phase()
 		if phase != callbridge.PhaseEnding && phase != callbridge.PhaseEnded {
 			_ = call.session.Transition(callbridge.PhaseEnding)
