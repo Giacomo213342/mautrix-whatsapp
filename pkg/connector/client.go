@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/purpshell/meowcaller"
 	"github.com/rs/zerolog"
 	"go.mau.fi/util/exsync"
 	"go.mau.fi/whatsmeow"
@@ -74,6 +75,11 @@ func (wa *WhatsAppConnector) LoadUserLogin(ctx context.Context, login *bridgev2.
 	if w.Device != nil {
 		log := w.UserLogin.Log.With().Str("component", "whatsmeow").Logger()
 		w.Client = whatsmeow.NewClient(w.Device, waLog.Zerolog(log))
+		if wa.Config.VoiceCalls.Enabled {
+			callLog := w.UserLogin.Log.With().Str("component", "voice_calls").Logger()
+			w.CallClient = meowcaller.NewClient(w.Client, meowcaller.WithLogger(callLog))
+			w.CallClient.OnIncomingCall(w.handleIncomingVoiceCall)
+		}
 		w.Client.AddEventHandlerWithSuccessStatus(w.handleWAEvent)
 		w.Client.SynchronousAck = true
 		w.Client.EnableDecryptedEventBuffer = bridgev2.PortalEventBuffer == 0
@@ -99,12 +105,13 @@ type resyncQueueItem struct {
 }
 
 type WhatsAppClient struct {
-	Main      *WhatsAppConnector
-	UserLogin *bridgev2.UserLogin
-	Client    *whatsmeow.Client
-	Device    *store.Device
-	JID       types.JID
-	MC        mClient
+	Main       *WhatsAppConnector
+	UserLogin  *bridgev2.UserLogin
+	Client     *whatsmeow.Client
+	CallClient *meowcaller.Client
+	Device     *store.Device
+	JID        types.JID
+	MC         mClient
 
 	historySyncWakeup  chan struct{}
 	stopLoops          atomic.Pointer[context.CancelFunc]

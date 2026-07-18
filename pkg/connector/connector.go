@@ -57,6 +57,7 @@ type WhatsAppConnector struct {
 	DeviceStore *sqlstore.Container
 	MsgConv     *msgconv.MessageConverter
 	DB          *wadb.Database
+	VoiceCalls  *voiceCallManager
 
 	firstClientConnectOnce sync.Once
 	backgroundConnectOnce  sync.Once
@@ -95,6 +96,10 @@ func (wa *WhatsAppConnector) GetName() bridgev2.BridgeName {
 
 func (wa *WhatsAppConnector) Init(bridge *bridgev2.Bridge) {
 	wa.Bridge = bridge
+	if wa.Config.VoiceCalls.Enabled {
+		wa.VoiceCalls = newVoiceCallManager(wa)
+		wa.registerMatrixVoiceCallHandlers()
+	}
 	wa.MsgConv = msgconv.New(bridge)
 	wa.MsgConv.AnimatedStickerConfig = wa.Config.AnimatedSticker
 	wa.MsgConv.ExtEvPolls = wa.Config.ExtEvPolls
@@ -232,6 +237,9 @@ func (wa *WhatsAppConnector) deleteLIDDMsMigration(ctx context.Context) {
 }
 
 func (wa *WhatsAppConnector) Stop() {
+	if wa.VoiceCalls != nil {
+		wa.VoiceCalls.Close()
+	}
 	if stop := wa.stopMediaEditCacheLoop.Swap(nil); stop != nil {
 		(*stop)()
 	}

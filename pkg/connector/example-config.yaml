@@ -22,6 +22,26 @@ displayname_template: '{{or .BusinessName .PushName .Phone .RedactedPhone "Unkno
 
 # Should incoming calls send a message to the Matrix room?
 call_start_notices: true
+# Experimental 1:1 voice call bridging between WhatsApp and Matrix.
+voice_calls:
+    # Keep disabled until the bridge image and Matrix client have passed the live call tests.
+    enabled: false
+    incoming: true
+    outgoing: true
+    max_concurrent_per_login: 1
+    ring_timeout: 45s
+    connect_timeout: 20s
+    # Fixed UDP range used by the Matrix WebRTC peer connection.
+    udp_port_min: 40000
+    udp_port_max: 40100
+    # Set this when the bridge is behind container NAT and the UDP range is port-forwarded.
+    public_ip: null
+    opus_bitrate: 24000
+    # TURN REST credentials are generated in memory from this shared secret.
+    # Use the same secret configured as static-auth-secret in coturn.
+    turn_uris: []
+    turn_shared_secret: null
+    turn_ttl: 1h
 # Should another user's cryptographic identity changing send a message to Matrix?
 identity_change_notices: false
 # Should the bridge mark you as online on WhatsApp when you send typing notifications?

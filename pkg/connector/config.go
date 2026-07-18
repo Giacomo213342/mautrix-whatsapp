@@ -3,6 +3,7 @@ package connector
 import (
 	_ "embed"
 	"fmt"
+	"net"
 	"strings"
 	"text/template"
 	"time"
@@ -35,23 +36,24 @@ type Config struct {
 
 	DisplaynameTemplate string `yaml:"displayname_template"`
 
-	CallStartNotices            bool          `yaml:"call_start_notices"`
-	IdentityChangeNotices       bool          `yaml:"identity_change_notices"`
-	SendPresenceOnTyping        bool          `yaml:"send_presence_on_typing"`
-	EnableStatusBroadcast       bool          `yaml:"enable_status_broadcast"`
-	DisableStatusBroadcastSend  bool          `yaml:"disable_status_broadcast_send"`
-	MuteStatusBroadcast         bool          `yaml:"mute_status_broadcast"`
-	StatusBroadcastTag          event.RoomTag `yaml:"status_broadcast_tag"`
-	PinnedTag                   event.RoomTag `yaml:"pinned_tag"`
-	ArchiveTag                  event.RoomTag `yaml:"archive_tag"`
-	WhatsappThumbnail           bool          `yaml:"whatsapp_thumbnail"`
-	URLPreviews                 bool          `yaml:"url_previews"`
-	ExtEvPolls                  bool          `yaml:"extev_polls"`
-	DisableViewOnce             bool          `yaml:"disable_view_once"`
-	ForceActiveDeliveryReceipts bool          `yaml:"force_active_delivery_receipts"`
-	DirectMediaAutoRequest      bool          `yaml:"direct_media_auto_request"`
-	InitialAutoReconnect        bool          `yaml:"initial_auto_reconnect"`
-	UseWhatsAppRetryStore       bool          `yaml:"use_whatsapp_retry_store"`
+	CallStartNotices            bool             `yaml:"call_start_notices"`
+	VoiceCalls                  VoiceCallsConfig `yaml:"voice_calls"`
+	IdentityChangeNotices       bool             `yaml:"identity_change_notices"`
+	SendPresenceOnTyping        bool             `yaml:"send_presence_on_typing"`
+	EnableStatusBroadcast       bool             `yaml:"enable_status_broadcast"`
+	DisableStatusBroadcastSend  bool             `yaml:"disable_status_broadcast_send"`
+	MuteStatusBroadcast         bool             `yaml:"mute_status_broadcast"`
+	StatusBroadcastTag          event.RoomTag    `yaml:"status_broadcast_tag"`
+	PinnedTag                   event.RoomTag    `yaml:"pinned_tag"`
+	ArchiveTag                  event.RoomTag    `yaml:"archive_tag"`
+	WhatsappThumbnail           bool             `yaml:"whatsapp_thumbnail"`
+	URLPreviews                 bool             `yaml:"url_previews"`
+	ExtEvPolls                  bool             `yaml:"extev_polls"`
+	DisableViewOnce             bool             `yaml:"disable_view_once"`
+	ForceActiveDeliveryReceipts bool             `yaml:"force_active_delivery_receipts"`
+	DirectMediaAutoRequest      bool             `yaml:"direct_media_auto_request"`
+	InitialAutoReconnect        bool             `yaml:"initial_auto_reconnect"`
+	UseWhatsAppRetryStore       bool             `yaml:"use_whatsapp_retry_store"`
 
 	AnimatedSticker msgconv.AnimatedStickerConfig `yaml:"animated_sticker"`
 
@@ -78,6 +80,22 @@ type Config struct {
 	displaynameTemplate *template.Template `yaml:"-"`
 }
 
+type VoiceCallsConfig struct {
+	Enabled               bool          `yaml:"enabled"`
+	Incoming              bool          `yaml:"incoming"`
+	Outgoing              bool          `yaml:"outgoing"`
+	MaxConcurrentPerLogin int           `yaml:"max_concurrent_per_login"`
+	RingTimeout           time.Duration `yaml:"ring_timeout"`
+	ConnectTimeout        time.Duration `yaml:"connect_timeout"`
+	UDPPortMin            uint16        `yaml:"udp_port_min"`
+	UDPPortMax            uint16        `yaml:"udp_port_max"`
+	PublicIP              string        `yaml:"public_ip"`
+	OpusBitrate           int           `yaml:"opus_bitrate"`
+	TURNURIs              []string      `yaml:"turn_uris"`
+	TURNSharedSecret      string        `yaml:"turn_shared_secret"`
+	TURNTTL               time.Duration `yaml:"turn_ttl"`
+}
+
 type umConfig Config
 
 func (c *Config) UnmarshalYAML(node *yaml.Node) error {
@@ -89,6 +107,32 @@ func (c *Config) UnmarshalYAML(node *yaml.Node) error {
 }
 
 func (c *Config) PostProcess() error {
+	if c.VoiceCalls.Enabled {
+		if c.VoiceCalls.MaxConcurrentPerLogin < 1 {
+			return fmt.Errorf("voice_calls.max_concurrent_per_login must be at least 1")
+		}
+		if c.VoiceCalls.RingTimeout <= 0 {
+			return fmt.Errorf("voice_calls.ring_timeout must be positive")
+		}
+		if c.VoiceCalls.ConnectTimeout <= 0 {
+			return fmt.Errorf("voice_calls.connect_timeout must be positive")
+		}
+		if c.VoiceCalls.UDPPortMin == 0 || c.VoiceCalls.UDPPortMax < c.VoiceCalls.UDPPortMin {
+			return fmt.Errorf("voice_calls UDP port range is invalid")
+		}
+		if c.VoiceCalls.PublicIP != "" && net.ParseIP(c.VoiceCalls.PublicIP) == nil {
+			return fmt.Errorf("voice_calls.public_ip must be an IPv4 or IPv6 address")
+		}
+		if c.VoiceCalls.OpusBitrate < 6000 || c.VoiceCalls.OpusBitrate > 510000 {
+			return fmt.Errorf("voice_calls.opus_bitrate must be between 6000 and 510000")
+		}
+		if len(c.VoiceCalls.TURNURIs) > 0 && c.VoiceCalls.TURNSharedSecret == "" {
+			return fmt.Errorf("voice_calls.turn_shared_secret is required when turn_uris is configured")
+		}
+		if c.VoiceCalls.TURNTTL <= 0 {
+			return fmt.Errorf("voice_calls.turn_ttl must be positive")
+		}
+	}
 	var err error
 	c.displaynameTemplate, err = template.New("displayname").Parse(c.DisplaynameTemplate)
 	if err != nil {
@@ -113,6 +157,19 @@ func upgradeConfig(helper up.Helper) {
 	helper.Copy(up.Str, "displayname_template")
 
 	helper.Copy(up.Bool, "call_start_notices")
+	helper.Copy(up.Bool, "voice_calls", "enabled")
+	helper.Copy(up.Bool, "voice_calls", "incoming")
+	helper.Copy(up.Bool, "voice_calls", "outgoing")
+	helper.Copy(up.Int, "voice_calls", "max_concurrent_per_login")
+	helper.Copy(up.Str|up.Int, "voice_calls", "ring_timeout")
+	helper.Copy(up.Str|up.Int, "voice_calls", "connect_timeout")
+	helper.Copy(up.Int, "voice_calls", "udp_port_min")
+	helper.Copy(up.Int, "voice_calls", "udp_port_max")
+	helper.Copy(up.Str|up.Null, "voice_calls", "public_ip")
+	helper.Copy(up.Int, "voice_calls", "opus_bitrate")
+	helper.Copy(up.List, "voice_calls", "turn_uris")
+	helper.Copy(up.Str|up.Null, "voice_calls", "turn_shared_secret")
+	helper.Copy(up.Str|up.Int, "voice_calls", "turn_ttl")
 	helper.Copy(up.Bool, "identity_change_notices")
 	helper.Copy(up.Bool, "send_presence_on_typing")
 	helper.Copy(up.Bool, "enable_status_broadcast")

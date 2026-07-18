@@ -23,8 +23,8 @@ jobs:
           go-version: ${{ matrix.go-version }}
           cache: true
 
-      - name: Install libolm
-        run: sudo apt-get install libolm-dev libolm3
+      - name: Install native libraries
+        run: sudo apt-get install libolm-dev libolm3 libopus-dev libopusfile-dev
 
       - name: Install dependencies
         run: |
