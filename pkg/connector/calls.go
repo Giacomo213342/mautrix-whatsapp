@@ -165,7 +165,7 @@ func (wa *WhatsAppClient) handleMatrixCallInvite(ctx context.Context, portal *br
 		return
 	}
 	if isVideo && !sdpHasH264Video(description.SDP) {
-		call.failOutgoingSetup(ctx, errors.New("Matrix video offer does not include H.264"))
+		call.failOutgoingSetup(ctx, errors.New("matrix video offer does not include H.264"))
 		return
 	}
 	_ = session.Transition(callbridge.PhaseRinging)
