@@ -84,6 +84,7 @@ type VoiceCallsConfig struct {
 	Enabled               bool          `yaml:"enabled"`
 	Incoming              bool          `yaml:"incoming"`
 	Outgoing              bool          `yaml:"outgoing"`
+	Video                 bool          `yaml:"video"`
 	MaxConcurrentPerLogin int           `yaml:"max_concurrent_per_login"`
 	RingTimeout           time.Duration `yaml:"ring_timeout"`
 	ConnectTimeout        time.Duration `yaml:"connect_timeout"`
@@ -160,6 +161,7 @@ func upgradeConfig(helper up.Helper) {
 	helper.Copy(up.Bool, "voice_calls", "enabled")
 	helper.Copy(up.Bool, "voice_calls", "incoming")
 	helper.Copy(up.Bool, "voice_calls", "outgoing")
+	helper.Copy(up.Bool, "voice_calls", "video")
 	helper.Copy(up.Int, "voice_calls", "max_concurrent_per_login")
 	helper.Copy(up.Str|up.Int, "voice_calls", "ring_timeout")
 	helper.Copy(up.Str|up.Int, "voice_calls", "connect_timeout")

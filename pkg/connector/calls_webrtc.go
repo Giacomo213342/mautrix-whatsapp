@@ -7,11 +7,14 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pion/interceptor"
+	"github.com/pion/rtcp"
 	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v4"
+	"github.com/pion/webrtc/v4/pkg/media"
 	"github.com/pion/webrtc/v4/pkg/media/samplebuilder"
 	"maunium.net/go/mautrix/event"
 
@@ -32,6 +35,24 @@ func (m *voiceCallManager) newPeerConnection(call *liveVoiceCall) error {
 		PayloadType: 111,
 	}, webrtc.RTPCodecTypeAudio); err != nil {
 		return fmt.Errorf("register Opus codec: %w", err)
+	}
+	if call.isVideo {
+		if err := mediaEngine.RegisterCodec(webrtc.RTPCodecParameters{
+			RTPCodecCapability: webrtc.RTPCodecCapability{
+				MimeType:    webrtc.MimeTypeH264,
+				ClockRate:   90000,
+				SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
+				RTCPFeedback: []webrtc.RTCPFeedback{
+					{Type: "goog-remb"},
+					{Type: "ccm", Parameter: "fir"},
+					{Type: "nack"},
+					{Type: "nack", Parameter: "pli"},
+				},
+			},
+			PayloadType: 102,
+		}, webrtc.RTPCodecTypeVideo); err != nil {
+			return fmt.Errorf("register H.264 codec: %w", err)
+		}
 	}
 	var settings webrtc.SettingEngine
 	if err := settings.SetEphemeralUDPPortRange(m.connector.Config.VoiceCalls.UDPPortMin, m.connector.Config.VoiceCalls.UDPPortMax); err != nil {
@@ -65,20 +86,13 @@ func (m *voiceCallManager) newPeerConnection(call *liveVoiceCall) error {
 		_ = peerConnection.Close()
 		return fmt.Errorf("create Matrix audio track: %w", err)
 	}
-	call.localTrack = track
+	call.localAudioTrack = track
 	sender, err := peerConnection.AddTrack(track)
 	if err != nil {
 		_ = peerConnection.Close()
 		return fmt.Errorf("attach Matrix audio track: %w", err)
 	}
-	go func() {
-		buffer := make([]byte, 1500)
-		for {
-			if _, _, readErr := sender.Read(buffer); readErr != nil {
-				return
-			}
-		}
-	}()
+	go drainRTCP(sender)
 
 	call.matrixAudioQueue = callaudio.NewFrameQueue(8)
 	call.matrixToWA, err = callaudio.NewOpusTrackSource(call.matrixAudioQueue)
@@ -91,6 +105,29 @@ func (m *voiceCallManager) newPeerConnection(call *liveVoiceCall) error {
 		_ = call.matrixToWA.Close()
 		_ = peerConnection.Close()
 		return fmt.Errorf("create Matrix Opus encoder: %w", err)
+	}
+	if call.isVideo {
+		videoTrack, videoErr := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{
+			MimeType:    webrtc.MimeTypeH264,
+			ClockRate:   90000,
+			SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
+		}, "video", "mautrix-whatsapp")
+		if videoErr != nil {
+			_ = call.matrixToWA.Close()
+			_ = call.waToMatrix.Close()
+			_ = peerConnection.Close()
+			return fmt.Errorf("create Matrix H.264 track: %w", videoErr)
+		}
+		call.localVideoTrack = videoTrack
+		videoSender, videoErr := peerConnection.AddTrack(videoTrack)
+		if videoErr != nil {
+			_ = call.matrixToWA.Close()
+			_ = call.waToMatrix.Close()
+			_ = peerConnection.Close()
+			return fmt.Errorf("attach Matrix H.264 track: %w", videoErr)
+		}
+		go drainRTCP(videoSender)
+		call.waVideoToMatrix = &matrixH264Sink{track: videoTrack}
 	}
 
 	peerConnection.OnICECandidate(func(candidate *webrtc.ICECandidate) {
@@ -115,11 +152,41 @@ func (m *voiceCallManager) newPeerConnection(call *liveVoiceCall) error {
 		}
 	})
 	peerConnection.OnTrack(func(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
-		if track.Kind() != webrtc.RTPCodecTypeAudio {
+		switch track.Kind() {
+		case webrtc.RTPCodecTypeAudio:
+			go call.consumeMatrixAudio(track)
+		case webrtc.RTPCodecTypeVideo:
+			if !call.isVideo || !strings.EqualFold(track.Codec().MimeType, webrtc.MimeTypeH264) {
+				return
+			}
+			call.mu.Lock()
+			call.remoteVideoTrack = track
+			call.mu.Unlock()
+			call.requestMatrixVideoKeyframe()
+			go call.consumeMatrixVideo(track)
+		}
+	})
+	return nil
+}
+
+func drainRTCP(sender *webrtc.RTPSender) {
+	buffer := make([]byte, 1500)
+	for {
+		if _, _, err := sender.Read(buffer); err != nil {
 			return
 		}
-		go call.consumeMatrixAudio(track)
-	})
+	}
+}
+
+type matrixH264Sink struct {
+	track *webrtc.TrackLocalStaticSample
+}
+
+func (sink *matrixH264Sink) WriteVideo(accessUnit []byte) error {
+	return sink.track.WriteSample(media.Sample{Data: accessUnit, Duration: time.Second / 30})
+}
+
+func (sink *matrixH264Sink) Close() error {
 	return nil
 }
 
@@ -157,6 +224,84 @@ func (call *liveVoiceCall) consumeMatrixAudio(track *webrtc.TrackRemote) {
 			}
 		}
 	}
+}
+
+func (call *liveVoiceCall) consumeMatrixVideo(track *webrtc.TrackRemote) {
+	buffer := samplebuilder.New(100, &codecs.H264Packet{}, 90000)
+	for {
+		packet, _, err := track.ReadRTP()
+		if err != nil {
+			return
+		}
+		buffer.Push(packet)
+		for sample := buffer.Pop(); sample != nil; sample = buffer.Pop() {
+			duration := sample.Duration
+			if duration <= 0 {
+				duration = time.Second / 30
+			}
+			waCall := call.waCall
+			if waCall == nil {
+				continue
+			}
+			if err = waCall.SendVideoWithDuration(sample.Data, duration); err != nil && call.videoDropLogged.CompareAndSwap(false, true) {
+				call.client.UserLogin.Log.Debug().Err(err).
+					Str("call_id", call.session.MatrixCallID).
+					Msg("Dropping Matrix video until WhatsApp video media becomes ready")
+			}
+		}
+	}
+}
+
+func (call *liveVoiceCall) requestMatrixVideoKeyframe() {
+	call.mu.Lock()
+	track := call.remoteVideoTrack
+	peerConnection := call.peerConnection
+	call.mu.Unlock()
+	if track == nil || peerConnection == nil {
+		return
+	}
+	if err := peerConnection.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: uint32(track.SSRC())}}); err != nil {
+		call.client.UserLogin.Log.Debug().Err(err).
+			Str("call_id", call.session.MatrixCallID).
+			Msg("Failed to request Matrix video keyframe")
+	}
+}
+
+func sdpHasVideo(raw string) bool {
+	hasVideo, _ := sdpVideoSupport(raw)
+	return hasVideo
+}
+
+func sdpHasH264Video(raw string) bool {
+	_, hasH264 := sdpVideoSupport(raw)
+	return hasH264
+}
+
+func sdpVideoSupport(raw string) (hasVideo, hasH264 bool) {
+	videoSection := false
+	videoActive := false
+	videoH264 := false
+	finishSection := func() {
+		if videoSection && videoActive {
+			hasVideo = true
+			hasH264 = hasH264 || videoH264
+		}
+	}
+	for _, line := range strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n") {
+		if strings.HasPrefix(line, "m=") {
+			finishSection()
+			fields := strings.Fields(strings.TrimPrefix(line, "m="))
+			videoSection = len(fields) >= 2 && fields[0] == "video"
+			videoActive = videoSection && fields[1] != "0"
+			videoH264 = false
+		} else if videoActive && line == "a=inactive" {
+			videoActive = false
+		} else if videoSection && strings.HasPrefix(strings.ToLower(line), "a=rtpmap:") && strings.Contains(strings.ToLower(line), " h264/90000") {
+			videoH264 = true
+		}
+	}
+	finishSection()
+	return
 }
 
 func (call *liveVoiceCall) handleLocalCandidate(candidate webrtc.ICECandidateInit) {

@@ -36,15 +36,20 @@ type liveVoiceCall struct {
 	waCall       *meowcaller.Call
 	peer         string
 	localPartyID string
+	isVideo      bool
 
 	setupMu                  sync.Mutex
 	ending                   atomic.Bool
+	videoDropLogged          atomic.Bool
 	mu                       sync.Mutex
 	peerConnection           *webrtc.PeerConnection
-	localTrack               *webrtc.TrackLocalStaticSample
+	localAudioTrack          *webrtc.TrackLocalStaticSample
+	localVideoTrack          *webrtc.TrackLocalStaticSample
+	remoteVideoTrack         *webrtc.TrackRemote
 	waToMatrix               *callaudio.OpusTrackSink
 	matrixToWA               *callaudio.OpusTrackSource
 	matrixAudioQueue         *callaudio.FrameQueue
+	waVideoToMatrix          meowcaller.VideoSink
 	pendingCandidates        []webrtc.ICECandidateInit
 	pendingCandidatesByParty map[string][]webrtc.ICECandidateInit
 	pendingLocalCandidates   []webrtc.ICECandidateInit
@@ -165,6 +170,9 @@ func (call *liveVoiceCall) terminate(ctx context.Context, reason string, notifyM
 		}
 		if call.waToMatrix != nil {
 			_ = call.waToMatrix.Close()
+		}
+		if call.waVideoToMatrix != nil {
+			_ = call.waVideoToMatrix.Close()
 		}
 		if call.peerConnection != nil {
 			_ = call.peerConnection.Close()

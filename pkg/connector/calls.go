@@ -19,8 +19,9 @@ import (
 func (wa *WhatsAppClient) handleIncomingVoiceCall(waCall *meowcaller.Call) {
 	ctx := context.Background()
 	config := wa.Main.Config.VoiceCalls
-	if wa.Main.VoiceCalls == nil || !config.Incoming || waCall.IsVideo() {
-		wa.rejectIncomingCall(waCall, "incoming voice calls disabled or video call unsupported")
+	isVideo := waCall.IsVideo()
+	if wa.Main.VoiceCalls == nil || !config.Incoming || (isVideo && !config.Video) {
+		wa.rejectIncomingCall(waCall, "incoming calls disabled or video calls unsupported")
 		return
 	}
 	callPeer := waCall.Peer()
@@ -53,6 +54,7 @@ func (wa *WhatsAppClient) handleIncomingVoiceCall(waCall *meowcaller.Call) {
 		waCall:       waCall,
 		peer:         portalPeer.String(),
 		localPartyID: localPartyID,
+		isVideo:      isVideo,
 	}
 	waCall.OnEnd(func(reason string) { call.handleWhatsAppEnd(reason) })
 	waCall.OnReady(func() { call.markMediaReady() })
@@ -90,7 +92,7 @@ func (wa *WhatsAppClient) handleIncomingVoiceCall(waCall *meowcaller.Call) {
 		call.failIncomingSetup(ctx, err)
 		return
 	}
-	call.attachWhatsAppAudio()
+	call.attachWhatsAppMedia()
 	offer, err := call.peerConnection.CreateOffer(nil)
 	if err != nil {
 		call.setupMu.Unlock()
@@ -127,6 +129,10 @@ func (wa *WhatsAppClient) handleMatrixCallInvite(ctx context.Context, portal *br
 	if err != nil || description.Type != webrtc.SDPTypeOffer {
 		return
 	}
+	isVideo := sdpHasVideo(description.SDP)
+	if isVideo && !config.Video {
+		return
+	}
 	localPartyID, err := newCallIdentifier()
 	if err != nil {
 		return
@@ -144,6 +150,7 @@ func (wa *WhatsAppClient) handleMatrixCallInvite(ctx context.Context, portal *br
 		portal:       portal,
 		peer:         target.String(),
 		localPartyID: localPartyID,
+		isVideo:      isVideo,
 	}
 	if !call.selectRemoteParty(content.PartyID) {
 		return
@@ -155,6 +162,10 @@ func (wa *WhatsAppClient) handleMatrixCallInvite(ctx context.Context, portal *br
 	call.intent = intent
 	if err = call.manager.add(call); err != nil {
 		_ = call.sendHangup(ctx, string(event.CallHangupUserHangup))
+		return
+	}
+	if isVideo && !sdpHasH264Video(description.SDP) {
+		call.failOutgoingSetup(ctx, errors.New("Matrix video offer does not include H.264"))
 		return
 	}
 	_ = session.Transition(callbridge.PhaseRinging)
@@ -176,7 +187,7 @@ func (wa *WhatsAppClient) handleMatrixCallInvite(ctx context.Context, portal *br
 		return
 	}
 
-	waCall, err := wa.CallClient.Call(session.Context(), target.String())
+	waCall, err := wa.CallClient.CallWithOptions(session.Context(), target.String(), meowcaller.CallOptions{Video: isVideo})
 	if err != nil {
 		call.failOutgoingSetup(ctx, fmt.Errorf("place WhatsApp call: %w", err))
 		return
@@ -184,16 +195,20 @@ func (wa *WhatsAppClient) handleMatrixCallInvite(ctx context.Context, portal *br
 	call.waCall = waCall
 	session.WhatsAppID = waCall.ID()
 	call.manager.bindWhatsAppID(call)
-	call.attachWhatsAppAudio()
+	call.attachWhatsAppMedia()
 	waCall.OnReady(func() { call.markMediaReady() })
 	waCall.OnEnd(func(reason string) { call.handleWhatsAppEnd(reason) })
 	waCall.OnPeerAccept(func() { call.handleWhatsAppAccept() })
 	call.startRingTimeout(config.RingTimeout)
 }
 
-func (call *liveVoiceCall) attachWhatsAppAudio() {
+func (call *liveVoiceCall) attachWhatsAppMedia() {
 	call.waCall.Receive(call.waToMatrix)
 	call.waCall.Play(call.matrixAudioQueue)
+	if call.isVideo {
+		call.waCall.ReceiveVideo(call.waVideoToMatrix)
+		call.waCall.OnVideoKeyframeRequest(call.requestMatrixVideoKeyframe)
+	}
 }
 
 func (call *liveVoiceCall) handleMatrixAnswer(ctx context.Context, content *event.CallAnswerEventContent) {

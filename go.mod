@@ -9,6 +9,7 @@ tool go.mau.fi/util/cmd/maubuild
 require (
 	github.com/lib/pq v1.12.3
 	github.com/pion/interceptor v0.1.42
+	github.com/pion/rtcp v1.2.16
 	github.com/pion/rtp v1.8.26
 	github.com/pion/webrtc/v4 v4.1.8
 	github.com/purpshell/meowcaller v0.0.0-20260717112041-9769d5aaaeca
@@ -46,7 +47,6 @@ require (
 	github.com/pion/mdns/v2 v2.1.0 // indirect
 	github.com/pion/opus v0.1.0 // indirect
 	github.com/pion/randutil v0.1.0 // indirect
-	github.com/pion/rtcp v1.2.16 // indirect
 	github.com/pion/sctp v1.9.4 // indirect
 	github.com/pion/sdp/v3 v3.0.16 // indirect
 	github.com/pion/srtp/v3 v3.0.9 // indirect

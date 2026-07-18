@@ -22,12 +22,14 @@ displayname_template: '{{or .BusinessName .PushName .Phone .RedactedPhone "Unkno
 
 # Should incoming calls send a message to the Matrix room?
 call_start_notices: true
-# Experimental 1:1 voice call bridging between WhatsApp and Matrix.
+# Experimental 1:1 voice and video call bridging between WhatsApp and Matrix.
 voice_calls:
     # Keep disabled until the bridge image and Matrix client have passed the live call tests.
     enabled: false
     incoming: true
     outgoing: true
+    # Bridge video as H.264 without transcoding. Both endpoints must support H.264.
+    video: false
     max_concurrent_per_login: 1
     ring_timeout: 45s
     connect_timeout: 20s
