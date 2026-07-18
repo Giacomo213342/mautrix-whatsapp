@@ -23,6 +23,15 @@ func (wa *WhatsAppClient) handleIncomingVoiceCall(waCall *meowcaller.Call) {
 		wa.rejectIncomingCall(waCall, "incoming voice calls disabled or video call unsupported")
 		return
 	}
+	callPeer := waCall.Peer()
+	portalPeer := wa.maybeConvertJIDToLID(ctx, callPeer)
+	if portalPeer != callPeer {
+		wa.UserLogin.Log.Debug().
+			Stringer("lid", callPeer).
+			Stringer("pn", portalPeer).
+			Str("call_id", waCall.ID()).
+			Msg("Using phone-number portal for incoming LID call")
+	}
 
 	matrixCallID, err := newCallIdentifier()
 	if err != nil {
@@ -42,7 +51,7 @@ func (wa *WhatsAppClient) handleIncomingVoiceCall(waCall *meowcaller.Call) {
 		session:      session,
 		client:       wa,
 		waCall:       waCall,
-		peer:         waCall.Peer().String(),
+		peer:         portalPeer.String(),
 		localPartyID: localPartyID,
 	}
 	waCall.OnEnd(func(reason string) { call.handleWhatsAppEnd(reason) })
@@ -53,7 +62,7 @@ func (wa *WhatsAppClient) handleIncomingVoiceCall(waCall *meowcaller.Call) {
 	}
 	_ = session.Transition(callbridge.PhaseRinging)
 
-	portal, err := wa.Main.Bridge.GetPortalByKey(ctx, wa.makeWAPortalKey(waCall.Peer()))
+	portal, err := wa.Main.Bridge.GetPortalByKey(ctx, wa.makeWAPortalKey(portalPeer))
 	if err != nil {
 		call.failIncomingSetup(ctx, fmt.Errorf("resolve portal: %w", err))
 		return
@@ -64,7 +73,7 @@ func (wa *WhatsAppClient) handleIncomingVoiceCall(waCall *meowcaller.Call) {
 			return
 		}
 	}
-	intent, ok := portal.GetIntentFor(ctx, wa.makeEventSender(ctx, waCall.Peer()), wa.UserLogin, bridgev2.RemoteEventMessage)
+	intent, ok := portal.GetIntentFor(ctx, wa.makeEventSender(ctx, portalPeer), wa.UserLogin, bridgev2.RemoteEventMessage)
 	if !ok || intent == nil {
 		call.failIncomingSetup(ctx, errors.New("resolve Matrix ghost intent"))
 		return
