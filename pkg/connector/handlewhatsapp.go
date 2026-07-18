@@ -548,6 +548,13 @@ func (wa *WhatsAppClient) handleWACallStart(ctx context.Context, group, sender, 
 	if !wa.Main.Config.CallStartNotices || time.Since(ts) > callEventMaxAge {
 		return true
 	}
+	// A plain CallOffer is a 1:1 call. When voice call bridging is active,
+	// meowcaller turns that offer into Matrix call events, so the legacy
+	// "Use the WhatsApp app to answer" notice would be both duplicate and wrong.
+	// CallOfferNotice (primarily group calls) still uses a non-empty callType.
+	if wa.Main.Config.VoiceCalls.Enabled && wa.Main.Config.VoiceCalls.Incoming && group.IsEmpty() && callType == "" {
+		return true
+	}
 	if sender.Server == types.HiddenUserServer && senderAlt.Server == types.DefaultUserServer {
 		wa.UserLogin.Log.Debug().
 			Stringer("lid", sender).
