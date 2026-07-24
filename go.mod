@@ -24,7 +24,7 @@ require (
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/hraban/opus.v2 v2.0.0-20230925203106-0188a62cb302
 	gopkg.in/yaml.v3 v3.0.1
-	maunium.net/go/mautrix v0.29.1-0.20260719130752-5743d9b6f27e
+	maunium.net/go/mautrix v0.29.1-0.20260723095015-f7cfa8766d2b
 )
 
 require (
